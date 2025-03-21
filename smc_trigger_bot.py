@@ -24,9 +24,26 @@ def get_kst_time():
     kst = timezone(timedelta(hours=9))
     return datetime.now(kst)
 
+def is_market_open():
+    # 현재 한국 시간 확인
+    now = get_kst_time()
+    current_hour = now.hour
+    current_minute = now.minute
+
+    # 한국 주식 시장(KRX) 장 열림 시간: 오전 9시 ~ 오후 3시 30분
+    market_open_hour = 9
+    market_close_hour = 15  # 오후 3시
+    market_close_minute = 30
+
+    # 장이 열리는 시간인지 확인
+    if current_hour < market_open_hour or (current_hour > market_close_hour or (current_hour == market_close_hour and current_minute > market_close_minute)):
+        return False  # 장이 닫혀 있음
+    return True  # 장이 열려 있음
+
 def wait_until_next_4hour_candle():
     now = get_kst_time()
     # 4시간봉 기준: 0시, 4시, 8시, 12시, 16시, 20시
+    # 하지만 장 시간(오전 9시 ~ 오후 3시 30분)에 맞춰 조정
     current_hour = now.hour
     next_candle_hour = ((current_hour // 4) + 1) * 4
     if next_candle_hour == 24:
@@ -145,36 +162,71 @@ def main():
     with open("stocks.txt", "r", encoding="utf-8") as file:
         stock_codes = [line.strip() for line in file if line.strip()]
 
+    # 종목 수 확인
+    print(f"총 종목 수: {len(stock_codes)}")
+
+    # 종목을 50개씩 나눠서 처리
+    batch_size = 50
+    total_batches = (len(stock_codes) + batch_size - 1) // batch_size  # 총 배치 수 계산
+    batch_interval = 4 * 60 * 60 / total_batches  # 4시간(14400초)을 배치 수로 나눔
+    print(f"총 배치 수: {total_batches}, 배치 간 대기 시간: {batch_interval}초")
+
     while True:
         # SMC 트리거 봇 시작 메시지 전송
         message = "SMC 트리거 봇 시작! (4시간봉 기준, 한국 시장 시간)"
         send_message(message)
         print(message)
 
+        # 트리거 결과를 저장할 리스트
+        triggers = []
+
+        # 4시간 동안 50개씩 종목 처리 (장이 닫혀 있어도 분석은 진행)
+        for batch_idx in range(total_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min((batch_idx + 1) * batch_size, len(stock_codes))
+            batch_codes = stock_codes[start_idx:end_idx]
+
+            print(f"배치 {batch_idx + 1}/{total_batches} 처리 중... 종목 수: {len(batch_codes)}")
+            for code in batch_codes:
+                try:
+                    candles = get_4h_data(code)
+                    if candles is None or len(candles) < 5:
+                        continue
+
+                    order_blocks = find_order_blocks(candles)
+                    if order_blocks:
+                        trigger = check_triggers(candles, order_blocks[-1])  # 가장 최근 OB 체크
+                        if trigger:
+                            action = "매수" if trigger['type'] == "Buy" else "매도"
+                            trigger_message = f"트리거 감지! 종목: {code}, {action}, Price: {trigger['price']}, Stop: {trigger['stop']}"
+                            triggers.append(trigger_message)
+                            print(trigger_message)
+
+                except Exception as e:
+                    print(f"오류 발생: {code}, {e}")
+
+            # 다음 배치까지 대기 (4시간을 배치 수로 나눈 시간만큼 대기)
+            if batch_idx < total_batches - 1:  # 마지막 배치가 아니면 대기
+                print(f"다음 배치까지 대기: {batch_interval}초")
+                time.sleep(batch_interval)
+
+        # 4시간봉 캔들 완성 시점에 트리거 결과 전송 (장이 열려 있을 때만)
+        if is_market_open():
+            if triggers:
+                # 모든 트리거 메시지를 한 번에 전송
+                combined_message = "\n".join(triggers)
+                send_message(combined_message)
+                print("트리거 결과 전송 완료")
+            else:
+                send_message("이번 캔들에서 트리거가 감지되지 않았습니다.")
+                print("트리거 없음")
+        else:
+            print("장이 닫혀 있어 트리거 결과를 전송하지 않습니다.")
+
         # 다음 4시간봉 캔들까지 대기
         wait_seconds = wait_until_next_4hour_candle()
         print(f"다음 4시간봉 캔들 완성까지 대기: {wait_seconds}초")
         time.sleep(wait_seconds)
-
-        # 4시간봉 캔들 완성 후 트리거 확인
-        print(f"4시간봉 캔들 완성! 트리거 확인 시작...")
-        for code in stock_codes:
-            try:
-                candles = get_4h_data(code)
-                if candles is None or len(candles) < 5:
-                    continue
-
-                order_blocks = find_order_blocks(candles)
-                if order_blocks:
-                    trigger = check_triggers(candles, order_blocks[-1])  # 가장 최근 OB 체크
-                    if trigger:
-                        action = "매수" if trigger['type'] == "Buy" else "매도"
-                        message = f"트리거 감지! 종목: {code}, {action}, Price: {trigger['price']}, Stop: {trigger['stop']}"
-                        send_message(message)
-                        print(message)
-
-            except Exception as e:
-                print(f"오류 발생: {code}, {e}")
 
 if __name__ == "__main__":
     main()

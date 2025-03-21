@@ -63,10 +63,13 @@ def get_4h_data(stock_code):
     df = stock.history(period="14d", interval="1h")
     if df.empty:
         return None
-    # 인덱스를 datetime으로 변환
-    df.index = pd.to_datetime(df.index)
+    # 인덱스를 datetime으로 변환하고 KST 타임존으로 설정
+    df.index = pd.to_datetime(df.index).tz_convert('Asia/Seoul')
+    # 기준 시간도 KST 타임존으로 설정
+    kst = timezone(timedelta(hours=9))
+    origin_time = pd.Timestamp('2025-03-19 09:00:00', tz='Asia/Seoul')
     # 4시간봉으로 리샘플링 (오전 9시 기준)
-    df_4h = df.resample('4H', origin=pd.Timestamp('2025-03-19 09:00:00'), closed='right').agg({
+    df_4h = df.resample('4h', origin=origin_time, closed='right').agg({
         'Open': 'first',
         'High': 'max',
         'Low': 'min',

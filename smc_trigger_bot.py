@@ -42,14 +42,13 @@ def is_market_open():
 
 def wait_until_next_4hour_candle():
     now = get_kst_time()
-    # 4시간봉 기준: 0시, 4시, 8시, 12시, 16시, 20시
-    # 하지만 장 시간(오전 9시 ~ 오후 3시 30분)에 맞춰 조정
+    # 4시간봉 기준: 오전 9시, 오후 1시, 오후 5시, 오후 9시, 새벽 1시, 새벽 5시
     current_hour = now.hour
-    next_candle_hour = ((current_hour // 4) + 1) * 4
-    if next_candle_hour == 24:
-        next_candle_hour = 0
-        next_day = now + timedelta(days=1)
-        next_candle = datetime(next_day.year, next_day.month, next_day.day, next_candle_hour, 0, 0, tzinfo=now.tzinfo)
+    # 오전 9시를 기준으로 4시간 간격
+    hours_since_9am = (current_hour - 9) % 24
+    next_candle_hour = (9 + ((hours_since_9am // 4) + 1) * 4) % 24
+    if current_hour >= 21 or (current_hour < 9 and next_candle_hour < 9):
+        next_candle = datetime(now.year, now.month, now.day, next_candle_hour, 0, 0, tzinfo=now.tzinfo) + timedelta(days=1)
     else:
         next_candle = datetime(now.year, now.month, now.day, next_candle_hour, 0, 0, tzinfo=now.tzinfo)
     
@@ -121,19 +120,27 @@ def find_order_blocks(candles):
             })
     return order_blocks
 
-# FVG 계산 (3캔들 공백)
+# FVG 계산 (3캔들 공백, 정의에 맞게 수정)
 def detect_fvg(candles, index):
     if index < 2 or index >= len(candles) - 1:
         return None
     c1 = candles.iloc[index-2]
     c2 = candles.iloc[index-1]
     c3 = candles.iloc[index]
-    gap = c3['High'] - c1['Low']
-    if gap > 0.01 * c1['Low']:  # 최소 1% 공백 가정
+
+    # Bullish FVG: C3 고점이 C1 저점보다 높고, C2가 공백을 채우지 않음
+    if c3['High'] > c1['Low'] and c2['Low'] > c1['Low'] and c2['High'] < c3['High']:
         return {
             "start": c1['Low'],
             "end": c3['High'],
-            "type": "Bullish" if c2['Close'] > c1['Close'] else "Bearish"
+            "type": "Bullish"
+        }
+    # Bearish FVG: C3 저점이 C1 고점보다 낮고, C2가 공백을 채우지 않음
+    elif c3['Low'] < c1['High'] and c2['High'] < c1['High'] and c2['Low'] > c3['Low']:
+        return {
+            "start": c3['Low'],
+            "end": c1['High'],
+            "type": "Bearish"
         }
     return None
 
